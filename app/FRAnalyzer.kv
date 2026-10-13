@@ -1,0 +1,64 @@
+# 导入自定义阴影部件
+<ShadowBox@BoxLayout>:
+    canvas.before:
+        Color:
+            rgba: 1, 1, 1, .6
+        BoxShadow:
+            pos: self.pos
+            size: self.size
+            offset: -5, 5
+            blur_radius: 25
+            spread_radius: 0, 0
+            border_radius: 16, 16, 16, 16
+        Color:
+            rgba: .5, .5, .5, .6
+        BoxShadow:
+            pos: self.pos
+            size: self.size
+            offset: 10, -10
+            blur_radius: 25
+            spread_radius: -10, -10
+            border_radius: 16, 16, 16, 16
+        Color:
+            rgb: .95, .95, .95
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [16,]
+
+    orientation: 'vertical'
+    padding: 20
+
+<MainWidget>:
+    orientation: 'horizontal'
+    padding: 20
+    spacing: 20
+
+    canvas.before:
+        Color:
+            rgb: .9, .9, .9
+        Rectangle:
+            pos: self.pos
+            size: self.size
+
+    ShadowBox:
+        id: graph_col
+        size_hint_x: 0.45
+        Label:
+            text_size: self.size
+            halign: 'left'
+            valign: 'top'
+            color: 0.1, 0.1, 0.1
+            text: "graphics"
+
+    ShadowBox:
+        id: report_col
+        size_hint_x: 0.55
+        Label:
+            text_size: self.size
+            halign: 'left'
+            valign: 'top'
+            color: 0.1, 0.1, 0.1
+            text: "reports"
+
+
