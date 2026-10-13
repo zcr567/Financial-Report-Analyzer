@@ -1,1 +1,15 @@
-/.idea/
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 虚拟环境 / 缓存
+.venv/
+venv/
+.ipynb_checkpoints/
