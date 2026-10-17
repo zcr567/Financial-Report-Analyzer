@@ -17,13 +17,15 @@
     4. 利润质量与减值：非经常性损益占比；商誉/max(净资产, 1%×营业收入)
                       0分 非经常性≤20%且商誉≤10%；1分 任一在20~50%/10~30%；
                       2分 非经常性>50%或商誉>30%
-    5. 估值预期压力 ：PS_ttm / 样本中位数PS_ttm（需市值，财报内无）
+    5. 估值预期压力 ：PS_ttm / 样本中位数PS_ttm（市值来自外部行情）
 
 数据局限（如实标注，不编造）：
     - 指标 1/3 需要「上年同期」数据，仅金蝶（3 个年度）可算同比；
       商汤、广联达仅单年报告，同比无法计算。
     - 指标 1 的「样本中位数」仅有金蝶两年同比值（n=2），中位数为近似。
-    - 指标 5 需要市值（PS = 市值/营业收入），财报内不包含，标记为「需外部行情数据」。
+    - 指标 5 的市值＝年末收盘价×总股本（港股按年末汇率折人民币，见 CLOSE_PRICE /
+      TOTAL_SHARES / FX_HKD_CNY）；「样本中位数PS」为 5 份报告的近似值，
+      并非计划书要求的全样本 52 观测中位数，故 V 及估值得分仅供参考、不得强行定级。
     - 港股（金蝶/商汤）IFRS 不单独披露非经常性损益，按 0 处理并注明。
 
 输出：
@@ -66,6 +68,33 @@ COLOR_RISK = "#C0392B"     # 红
 COLOR_NA   = "#9AA0A6"     # 灰
 
 RISK_LEVELS = [(0, 2, "低"), (3, 5, "中"), (6, 8, "高"), (9, 10, "很高")]
+
+# ---------------------------------------------------------------------------
+# 外部行情数据（用于指标5 估值预期压力）
+# ---------------------------------------------------------------------------
+# 年末收盘价（元/股；港股为港元），来源：东方财富行情接口（不复权，商汤无分红故与复权一致）
+CLOSE_PRICE = {
+    ("金蝶国际", 2023): 11.38,
+    ("金蝶国际", 2024): 8.53,
+    ("金蝶国际", 2025): 13.29,
+    ("商汤-W", 2023): 1.16,
+    ("广联达", 2023): 17.14,
+}
+
+# 总股本（股）。商汤为 2023 年末值（港交所公告 33,468,925,000，现时已增发至 42.2 亿）；
+# 金蝶/广联达取现时点总股本（东方财富 f84），历史口径略异（漂移 <2%）
+TOTAL_SHARES = {
+    ("金蝶国际", 2023): 3514546771,
+    ("金蝶国际", 2024): 3514546771,
+    ("金蝶国际", 2025): 3514546771,
+    ("商汤-W", 2023): 33468925000,
+    ("广联达", 2023): 1651944342,
+}
+
+# 港元兑人民币（约，年均/年末中间价，来源：香港政府统计处 / 人民银行）
+FX_HKD_CNY = {2023: 0.905, 2024: 0.924, 2025: 0.922}
+
+HK_COMPANIES = {"金蝶国际", "商汤-W"}
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +165,20 @@ def score_quality(nr_ratio, gw_ratio):
     return max(nr_band, gw_band)
 
 
+def score_valuation(V, G):
+    """估值预期压力：V = PS_ttm / 样本中位数PS_ttm。"""
+    if V is None:
+        return None
+    if V <= 1.2:
+        return 0
+    if V <= 2.0:
+        return 1
+    # V > 2.0，需结合相对增长 G
+    if G is None or G == 0:
+        return None  # 边界待核验
+    return 1 if G > 0 else 2
+
+
 def risk_level(total):
     for lo, hi, name in RISK_LEVELS:
         if lo <= total <= hi:
@@ -157,6 +200,19 @@ def compute(data):
 
     yoy_vals = [v for v in yoy.values() if v is not None]
     median_yoy = float(np.median(yoy_vals)) if yoy_vals else None
+
+    # 指标5：先算各报告 PS_ttm（总市值/营业收入TTM），再取样本中位数
+    ps_ttm = {}
+    for (company, year), f in data.items():
+        rev = f["营业收入"]
+        close = CLOSE_PRICE.get((company, year))
+        shares = TOTAL_SHARES.get((company, year))
+        if rev and close and shares:
+            fx = FX_HKD_CNY.get(year, 1.0) if company in HK_COMPANIES else 1.0
+            mcap = close * shares * fx
+            ps_ttm[(company, year)] = mcap / rev
+    ps_vals = [v for v in ps_ttm.values() if v is not None]
+    median_ps = float(np.median(ps_vals)) if ps_vals else None
 
     results = []
     for company, code, year in REPORTS:
@@ -197,7 +253,11 @@ def compute(data):
         g4 = score_quality(nr_ratio, gw_ratio)
 
         # ---- 指标5 估值预期压力 ----
-        g5 = None  # 需市值，财报内无
+        ps = ps_ttm.get((company, year))
+        V = (ps / median_ps) if (ps is not None and median_ps) else None
+        # 相对增长 G 与指标1同源（营收同比增速 - 样本中位数）
+        G = (yv - median_yoy) if (yv is not None and median_yoy is not None) else None
+        g5 = score_valuation(V, G)
 
         scores = [g1, g2, g3, g4, g5]
         scored = [s for s in scores if s is not None]
@@ -216,7 +276,9 @@ def compute(data):
             "利润质量_非经常性损益占比": nr_ratio,
             "利润质量_商誉占比": gw_ratio,
             "利润质量_得分": g4,
-            "估值预期压力_PS_ttm": None,
+            "估值预期压力_PS_ttm": ps,
+            "估值预期压力_样本中位数PS": median_ps,
+            "估值预期压力_V": V,
             "估值预期压力_得分": g5,
             "可计算得分合计": total,
             "未评分指标数": sum(1 for s in scores if s is None),
@@ -257,7 +319,11 @@ def raw_str(r, idx):
         gw = r["利润质量_商誉占比"]
         return f"非经常性占比 {pct(nr)}，商誉/净资产 {pct(gw)}"
     # 估值
-    return "需外部行情数据（市值/PS）"
+    ps = r["估值预期压力_PS_ttm"]
+    v = r["估值预期压力_V"]
+    if ps is None:
+        return "—"
+    return f"PS {ps:.2f} 倍，相对中位数 {v:.2f} 倍"
 
 
 def score_label(s):
@@ -311,15 +377,16 @@ def plot_report(r):
     unscored = r["未评分指标数"]
     if total is not None:
         lvl = risk_level(total)
-        total_txt = f"可计算得分合计 {total} 分（满分10，另 {unscored} 项需外部/上年数据未计）"
-        title = f"{company}（{code}）{year} 年  财务脆弱性初步评估\n{total_txt}"
+        total_txt = f"可计算得分合计 {total} 分（满分10，另 {unscored} 项需上年同期数据未计）"
+        note = "注：估值按年末市值/营收计算，样本中位数为 5 份报告近似（非全样本52观测）"
+        title = f"{company}（{code}）{year} 年  财务脆弱性初步评估\n{total_txt}\n{note}"
     else:
         title = f"{company}（{code}）{year} 年  财务脆弱性初步评估（数据不足）"
-    ax.set_title(title, fontsize=14, fontweight="bold", pad=14)
+    ax.set_title(title, fontsize=13, fontweight="bold", pad=12)
 
     # 图例
     legend_labels = [("0 分 健康", COLOR_GOOD), ("1 分 预警", COLOR_WARN),
-                     ("2 分 风险", COLOR_RISK), ("数据不足/需外部数据", COLOR_NA)]
+                     ("2 分 风险", COLOR_RISK), ("数据不足（需上年数据）", COLOR_NA)]
     handles = [plt.Rectangle((0, 0), 1, 1, color=c) for _, c in legend_labels]
     ax.legend(handles, [t for t, _ in legend_labels], loc="lower center",
               bbox_to_anchor=(0.5, -0.22), ncol=4, frameon=False, fontsize=9)
